@@ -487,8 +487,10 @@ def run_scanner(scanner, stat_calculator, restrict_side=False) -> ScanData:
 
         signals['shares'] = signal_table.eqty_risk_shares(strategy_data.enhanced_price_data, 30000, signals['risk'])
 
-        partial_exit_ptc = ((signals.shares / r_multiplier) / signals.shares)
-        remaining_exit_ptc = 1 - partial_exit_ptc
+        _shares = signals.shares.copy()
+        _shares.loc[_shares == 0] = 1
+        partial_exit_ptc = ((signals.shares / r_multiplier) / _shares)
+        # remaining_exit_ptc = 1 - partial_exit_ptc
         partial_exit_shares = (signals.shares * partial_exit_ptc).apply(np.ceil)
         remaining_exit_shares = signals.shares - partial_exit_shares
 

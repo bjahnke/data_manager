@@ -298,8 +298,8 @@ def scan_inst(
         bench: pd.DataFrame,
         benchmark_id: str,
         scan_params,
+        strategy_simulator,
         expected_exceptions,
-        strategy_simulator
 ) -> scanner.ScanData:
     scan = scanner.StockDataGetter(
         # data_getter_method=lambda s: scanner.yf_get_stock_data(s, days=days, interval=interval_str),
