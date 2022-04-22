@@ -6,6 +6,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import typing as t
 import pandas_accessors.accessors as pda
+import regime
 
 
 class StockDataGetter:
@@ -172,7 +173,7 @@ def rolling_plot(
 
     pt = pda.PeakTable(peak_table)
     pt.data['px'] = pt.start_price(ndf)
-    pt = pt.unpivot(ndf.index)
+    pt = pt.unpivot()
     _shi_px = pt.loc[(pt.type == -1)]
     _shi_2 = _shi_px.loc[(_shi_px.lvl == 2)]
     _shi_3 = _shi_px.loc[(_shi_px.lvl == 3)]
