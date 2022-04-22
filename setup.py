@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='data_manager',
-    version='0.0.0.4',
+    version='0.0.0.5',
     packages=['data_manager'],
     url='',
     license='',

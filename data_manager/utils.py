@@ -202,6 +202,48 @@ def calc_stats(
     return historical_stat_sheet
 
 
+def win_rate_calc(
+    price_data: pd.DataFrame,
+    signals: pd.DataFrame,
+    min_periods,
+    round_to=2,
+):
+    """"""
+    price_data = round(price_data, round_to)
+    signal_table = pda.SignalTable(signals.copy())
+    signal_table.data["trade_count"] = signal_table.counts
+    signals_un_pivot = signal_table.unpivot()
+    signals_un_pivot = signals_un_pivot.loc[
+        ~signals_un_pivot.index.duplicated(keep="last")
+    ]
+    signals_un_pivot = signals_un_pivot[['dir', 'trade_count']]
+    signals_un_pivot = expand_index(signals_un_pivot, price_data.index)
+    signals_un_pivot.dir = signals_un_pivot.dir.fillna(0)
+
+    passive_returns_1d = pda_utils.simple_log_returns(price_data.close)
+    signals_un_pivot["strategy_returns_1d"] = passive_returns_1d * signals_un_pivot.dir
+    # don't use entry date to calculate returns
+    signals_un_pivot.loc[signal_table.entry, "strategy_returns_1d"] = 0
+    strategy_returns_1d = signals_un_pivot.strategy_returns_1d.copy()
+    cumul_returns = pda_utils.cumulative_returns_pct(strategy_returns_1d, min_periods)
+    # Cumulative t-stat
+    win_count = (
+        strategy_returns_1d.loc[strategy_returns_1d > 0]
+        .expanding()
+        .count()
+        .fillna(method="ffill")
+    )
+
+    total_count = (
+        strategy_returns_1d.loc[strategy_returns_1d != 0]
+        .expanding()
+        .count()
+        .fillna(method="ffill")
+    )
+    win_rate = (win_count / total_count).fillna(method="ffill")
+    return win_rate
+
+
 def main_re_download_data(other_json_path, base_json_path):
     """
     re download stock and bench data, write to locations specified in paths.json
