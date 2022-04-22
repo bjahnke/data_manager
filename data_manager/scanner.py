@@ -523,3 +523,7 @@ def run_scanner(scanner, stat_calculator, restrict_side=False) -> ScanData:
     entry_table = pd.concat(entry_table)
     peak_table = pd.concat(peak_table)
     return ScanData(stat_overview, strategy_data_lookup, entry_table, peak_table)
+
+
+if __name__ == '__main__':
+    print('here')

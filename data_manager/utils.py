@@ -1,6 +1,6 @@
-import src.utils.regime as regime
-import src.scanner as scanner
-import src.floor_ceiling_regime as sfcr
+# import src.utils.regime as regime
+import data_manager.scanner as scanner
+# import src.floor_ceiling_regime as sfcr
 import json
 import typing as t
 import pandas as pd
@@ -8,6 +8,8 @@ from matplotlib import pyplot as plt
 import pickle
 from multiprocessing import Pool, cpu_count
 from time import perf_counter
+import pandas_accessors as pda
+import numpy as np
 
 
 class DataLoader:
@@ -41,14 +43,173 @@ class DataLoader:
         return self.file_path(self.files['bench'][str(interval)][bench])
 
 
-def main_re_download_data():
+def simple_relative(df, bm_close, rebase=True):
+    """simplified version of relative calculation"""
+    bm = bm_close.ffill()
+    if rebase is True:
+        bm = bm.div(bm[0])
+    return df.div(bm, axis=0)
+
+
+def expand_index(gap_data, full_index):
+    """insert indexes into the given gap data"""
+    try:
+        expanded_idx = gap_data.__class__(index=full_index, columns=gap_data.columns, dtype='float64')
+    except AttributeError:
+        expanded_idx = gap_data.__class__(index=full_index, dtype='float64')
+    expanded_idx.loc[gap_data.index] = gap_data
+    return expanded_idx
+
+
+def calc_stats(
+    price_data: pd.DataFrame,
+    signals: pd.DataFrame,
+    min_periods: int,
+    window: int,
+    percentile: float,
+    limit,
+    round_to=2,
+) -> t.Union[None, pd.DataFrame]:
+    """
+    get full stats of strategy, rolling and expanding
+    :param round_to:
+    :param freq:
+    :param signals:
+    :param price_data:
+    :param min_periods:
+    :param window:
+    :param percentile:
+    :param limit:
+    :return:
+    """
+    price_data = round(price_data, round_to)
+    # TODO include regime returns
+    signal_table = pda.SignalTable(signals.copy())
+    signal_table.data["trade_count"] = signal_table.counts
+    signals_un_pivot = signal_table.unpivot(valid_dates=price_data.index)
+    signals_un_pivot = signals_un_pivot.loc[
+        ~signals_un_pivot.index.duplicated(keep="last")
+    ]
+    signals_un_pivot = signals_un_pivot[['dir', 'trade_count']]
+    signals_un_pivot = expand_index(signals_un_pivot, price_data.index)
+    signals_un_pivot.dir = signals_un_pivot.dir.fillna(0)
+
+    passive_returns_1d = pda.utils.simple_log_returns(price_data.close)
+    signals_un_pivot["strategy_returns_1d"] = passive_returns_1d * signals_un_pivot.dir
+    # don't use entry date to calculate returns
+    signals_un_pivot.loc[signal_table.entry, "strategy_returns_1d"] = 0
+    strategy_returns_1d = signals_un_pivot.strategy_returns_1d.copy()
+
+    # Performance
+    cumul_passive = pda.utils.cumulative_returns_pct(passive_returns_1d, min_periods)
+    cumul_returns = pda.utils.cumulative_returns_pct(strategy_returns_1d, min_periods)
+    cumul_excess = cumul_returns - cumul_passive - 1
+    cumul_returns_pct = cumul_returns.copy()
+
+    # Robustness metrics
+    grit_expanding = pda.utils.expanding_grit(cumul_returns)
+    grit_roll = pda.utils.rolling_grit(cumul_returns, window)
+
+    tr_expanding = pda.utils.expanding_tail_ratio(cumul_returns, percentile, limit)
+    tr_roll = pda.utils.rolling_tail_ratio(cumul_returns, window, percentile, limit)
+
+    profits_expanding = pda.utils.expanding_profits(strategy_returns_1d)
+    losses_expanding = pda.utils.expanding_losses(strategy_returns_1d)
+    pr_expanding = pda.utils.profit_ratio(profits=profits_expanding, losses=losses_expanding)
+
+    profits_roll = pda.utils.rolling_profits(strategy_returns_1d, window)
+    losses_roll = pda.utils.rolling_losses(strategy_returns_1d, window)
+    pr_roll = pda.utils.profit_ratio(profits=profits_roll, losses=losses_roll)
+
+    # Cumulative t-stat
+    win_count = (
+        strategy_returns_1d.loc[strategy_returns_1d > 0]
+        .expanding()
+        .count()
+        .fillna(method="ffill")
+    )
+
+    total_count = (
+        strategy_returns_1d.loc[strategy_returns_1d != 0]
+        .expanding()
+        .count()
+        .fillna(method="ffill")
+    )
+
+    csr_expanding = pda.utils.common_sense_ratio(pr_expanding, tr_expanding)
+    csr_roll = pda.utils.common_sense_ratio(pr_roll, tr_roll)
+    csr_roll = expand_index(csr_roll, price_data.index).ffill()
+
+    # Trade Count
+    trade_count = signals_un_pivot["trade_count"]
+    trade_count = expand_index(trade_count, price_data.index).ffill().fillna(0)
+    signal_roll = trade_count.diff(window)
+
+    win_rate = (win_count / total_count).fillna(method="ffill")
+    avg_win = profits_expanding / total_count
+    avg_loss = losses_expanding / total_count
+    edge_expanding = pda.utils.expectancy(win_rate, avg_win, avg_loss).fillna(method="ffill")
+    sqn_expanding = pda.utils.t_stat(trade_count, edge_expanding)
+
+    win_roll = strategy_returns_1d.copy()
+    win_roll[win_roll <= 0] = np.nan
+    win_rate_roll = win_roll.rolling(window, min_periods=0).count() / window
+    avg_win_roll = profits_roll / window
+    avg_loss_roll = losses_roll / window
+
+    edge_roll = pda.utils.expectancy(
+        win_rate=win_rate_roll, avg_win=avg_win_roll, avg_loss=avg_loss_roll
+    )
+    sqn_roll = pda.utils.t_stat(signal_count=signal_roll, trading_edge=edge_roll)
+
+    score_expanding = pda.utils.robustness_score(grit_expanding, csr_expanding, sqn_expanding)
+    score_roll = pda.utils.robustness_score(grit_roll, csr_roll, sqn_roll)
+    stat_sheet_dict = {
+        # Note: commented out items should be included afterwords
+        # 'ticker': symbol,
+        # 'tstmt': ticker_stmt,
+        # 'st': st,
+        # 'mt': mt,
+        "perf": cumul_returns_pct,
+        "excess": cumul_excess,
+        "trades": trade_count,
+        "win": win_rate,
+        "win_roll": win_rate_roll,
+        "avg_win": avg_win,
+        "avg_win_roll": avg_win_roll,
+        "avg_loss": avg_loss,
+        "avg_loss_roll": avg_loss_roll,
+        # 'geo_GE': round(geo_ge, 4),
+        "expectancy": edge_expanding,
+        "edge_roll": edge_roll,
+        "grit": grit_expanding,
+        "grit_roll": grit_roll,
+        "csr": csr_expanding,
+        "csr_roll": csr_roll,
+        "pr": pr_expanding,
+        "pr_roll": pr_roll,
+        "tail": tr_expanding,
+        "tail_roll": tr_roll,
+        "sqn": sqn_expanding,
+        "sqn_roll": sqn_roll,
+        "risk_adjusted_returns": score_expanding,
+        "risk_adj_returns_roll": score_roll,
+    }
+
+    historical_stat_sheet = pd.DataFrame.from_dict(stat_sheet_dict)
+    # historical_stat_sheet = historical_stat_sheet.ffill()
+
+    return historical_stat_sheet
+
+
+def main_re_download_data(other_json_path, base_json_path):
     """
     re download stock and bench data, write to locations specified in paths.json
     set index to int and store date index in separate series
     """
     sp500_wiki = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     ticks, _ = scanner.get_wikipedia_stocks(sp500_wiki)
-    data_loader = DataLoader.init_from_paths('other.json', 'base.json')
+    data_loader = DataLoader.init_from_paths(other_json_path, base_json_path)
     bench = 'SPY'
     days = 59
     interval = 15
@@ -67,7 +228,7 @@ def main_re_download_data():
     downloaded_data = downloaded_data[downloaded_data.columns.to_list()[1:]]
     bench_data = bench_data[bench_data.columns.to_list()[1:]]
 
-    relative = regime.simple_relative(downloaded_data, bench_data.close)
+    relative = simple_relative(downloaded_data, bench_data.close)
 
     # TODO add relative data to schema
     relative.to_csv(f'{data_loader.base}\\spy_relative_history_{interval_str}.csv')
@@ -95,6 +256,8 @@ def scan_inst(
         bench: pd.DataFrame,
         benchmark_id: str,
         scan_params,
+        expected_exceptions,
+        strategy_simulator
 ) -> scanner.ScanData:
     scan = scanner.StockDataGetter(
         # data_getter_method=lambda s: scanner.yf_get_stock_data(s, days=days, interval=interval_str),
@@ -104,17 +267,17 @@ def scan_inst(
         symbols=_ticks,
         # symbols=['FAST'],
         strategy=lambda pdf_, _: (
-            sfcr.fc_scale_strategy(
+            strategy_simulator(
                 price_data=scanner.data_to_relative(pdf_, bench),
                 abs_price_data=pdf_,
                 **scan_params['strategy_params']
             )
         ),
-        expected_exceptions=(regime.NotEnoughDataError, sfcr.NoEntriesError)
+        expected_exceptions=expected_exceptions
     )
     scan_data = scanner.run_scanner(
         scanner=scan,
-        stat_calculator=lambda data_, entry_signals_: sfcr.calc_stats(
+        stat_calculator=lambda data_, entry_signals_: calc_stats(
             data_,
             entry_signals_,
             **scan_params['stat_params']
@@ -205,65 +368,20 @@ class PriceGlob:
         return d
 
 
-def with_relative(data, bm_close, rebase=True):
-    ndf = data.copy().to_frame()
-    ndf['r'] = regime.simple_relative(data, bm_close, rebase)
-    return ndf
-
-
-def quick_plot(idx, price_data, r_close, bench):
-    sorted_close = r_close.iloc[-1].sort_values().dropna()
-    with_relative(
-        price_data.close[
-            sorted_close.index[idx]
-        ],
-        bench.close
-    ).plot(figsize=(8, 3), use_index=False)
-
-
-def main_roll_scan():
-    _data_loader = DataLoader.init_from_paths('other.json', 'base.json')
-    _strategy_path = _data_loader.file_path('strategy_lookup.pkl')
-    with open(_strategy_path, 'rb') as f:
-        _strategy_lookup = pickle.load(f)
-
-    _bench_str = 'SPY'
-    _interval = '15m'
-    _price_data = pd.read_csv(_data_loader.history_path(_bench_str, _interval), index_col=0, header=[0, 1]).iloc[
-                  1:].astype('float64')
-    _price_data.index = pd.to_datetime(_price_data.index, utc=True)
-    _bench = pd.read_csv(_data_loader.bench_path(_bench_str, _interval), index_col=0).astype('float64')
-    _bench.index = pd.to_datetime(_bench.index, utc=True)
-    _relative_rebased = PriceGlob(_price_data).relative_rebased(_bench.close)
-    _strategy_overview = pd.read_csv(_data_loader.file_path('stat_overview_15m.csv'))
-
-    _price_data_by_symbol = PriceGlob(_price_data).swap_level()
-    _symbol = 'CVX'
-    scanner.rolling_plot(
-        _price_data_by_symbol.data[_symbol],
-        _strategy_lookup[_symbol].enhanced_price_data[['open', 'high', 'low', 'close']],
-        _strategy_lookup[_symbol].stop_loss_series,
-        peak_table=_strategy_lookup[_symbol].peak_table,
-        ticker=_symbol,
-        plot_loop=True,
-        plot_rolling_lag=False
-    )
-    print('d')
-
-
 def mp_scan_inst(_args):
     return scan_inst(*_args)
 
 
 def split_list(alist, wanted_parts=1):
     length = len(alist)
-    return [alist[i*length // wanted_parts: (i+1)*length // wanted_parts]
-             for i in range(wanted_parts)]
+    return [
+        alist[i*length // wanted_parts: (i+1)*length // wanted_parts]
+        for i in range(wanted_parts)
+    ]
 
 
-def main(scan_args):
+def main(scan_args, strategy_simulator, expected_exceptions):
     scanner_settings = scan_args['scanner_settings']
-
     multiprocess = scanner_settings['multiprocess']
 
     (__ticks, __price_glob, __bench,
@@ -276,21 +394,23 @@ def main(scan_args):
     if multiprocess:
         multiprocess_scan(
             mp_scan_inst,
-            (__price_glob, __bench, __benchmark_id, scan_args),
+            (__price_glob, __bench, __benchmark_id, scan_args, strategy_simulator, expected_exceptions),
             list_of_tickers, __interval_str, __data_loader
         )
         print(perf_counter()-start)
     else:
         if scanner_settings['test_symbols'] is False:
-            t = __ticks[30:60]
+            _t = __ticks[30:60]
         else:
-            t = scanner_settings['test_symbols']
+            _t = scanner_settings['test_symbols']
         scan_res = scan_inst(
-            _ticks=t,
+            _ticks=_t,
             price_glob=__price_glob,
             bench=__bench,
             benchmark_id=__benchmark_id,
-            scan_params=scan_args
+            scan_params=scan_args,
+            strategy_simulator=strategy_simulator,
+            expected_exceptions=expected_exceptions
         )
 
 

@@ -2,8 +2,8 @@ from setuptools import setup
 
 setup(
     name='data_manager',
-    version='0.0.0.1',
-    packages=['manager'],
+    version='0.0.0.3',
+    packages=['data_manager'],
     url='',
     license='',
     author='bjahnke',
