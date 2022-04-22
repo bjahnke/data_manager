@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 import yfinance as yf
 from datetime import datetime, timedelta
 import typing as t
-import pandas_accessor.pda as pda
+import pandas_accessors.accessors as pda
 
 
 class StockDataGetter:

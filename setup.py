@@ -15,6 +15,6 @@ setup(
         'xlsxwriter',
         'matplotlib',
         'yfinance',
-        'pandas_accessors @ git+https://github.com/bjahnke/pandas_accessors.git#egg=pandas_accessors'
+        'pandas_accessors @ git+https://github.com/bjahnke/pandas_accessors.git#egg=pandas_accessors',
     ]
 )

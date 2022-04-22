@@ -8,7 +8,8 @@ from matplotlib import pyplot as plt
 import pickle
 from multiprocessing import Pool, cpu_count
 from time import perf_counter
-import pandas_accessors as pda
+import pandas_accessors.utils as pda_utils
+import pandas_accessors.accessors as pda
 import numpy as np
 
 
@@ -73,7 +74,6 @@ def calc_stats(
     """
     get full stats of strategy, rolling and expanding
     :param round_to:
-    :param freq:
     :param signals:
     :param price_data:
     :param min_periods:
@@ -86,7 +86,7 @@ def calc_stats(
     # TODO include regime returns
     signal_table = pda.SignalTable(signals.copy())
     signal_table.data["trade_count"] = signal_table.counts
-    signals_un_pivot = signal_table.unpivot(valid_dates=price_data.index)
+    signals_un_pivot = signal_table.unpivot()
     signals_un_pivot = signals_un_pivot.loc[
         ~signals_un_pivot.index.duplicated(keep="last")
     ]
@@ -94,32 +94,32 @@ def calc_stats(
     signals_un_pivot = expand_index(signals_un_pivot, price_data.index)
     signals_un_pivot.dir = signals_un_pivot.dir.fillna(0)
 
-    passive_returns_1d = pda.utils.simple_log_returns(price_data.close)
+    passive_returns_1d = pda_utils.simple_log_returns(price_data.close)
     signals_un_pivot["strategy_returns_1d"] = passive_returns_1d * signals_un_pivot.dir
     # don't use entry date to calculate returns
     signals_un_pivot.loc[signal_table.entry, "strategy_returns_1d"] = 0
     strategy_returns_1d = signals_un_pivot.strategy_returns_1d.copy()
 
     # Performance
-    cumul_passive = pda.utils.cumulative_returns_pct(passive_returns_1d, min_periods)
-    cumul_returns = pda.utils.cumulative_returns_pct(strategy_returns_1d, min_periods)
+    cumul_passive = pda_utils.cumulative_returns_pct(passive_returns_1d, min_periods)
+    cumul_returns = pda_utils.cumulative_returns_pct(strategy_returns_1d, min_periods)
     cumul_excess = cumul_returns - cumul_passive - 1
     cumul_returns_pct = cumul_returns.copy()
 
     # Robustness metrics
-    grit_expanding = pda.utils.expanding_grit(cumul_returns)
-    grit_roll = pda.utils.rolling_grit(cumul_returns, window)
+    grit_expanding = pda_utils.expanding_grit(cumul_returns)
+    grit_roll = pda_utils.rolling_grit(cumul_returns, window)
 
-    tr_expanding = pda.utils.expanding_tail_ratio(cumul_returns, percentile, limit)
-    tr_roll = pda.utils.rolling_tail_ratio(cumul_returns, window, percentile, limit)
+    tr_expanding = pda_utils.expanding_tail_ratio(cumul_returns, percentile, limit)
+    tr_roll = pda_utils.rolling_tail_ratio(cumul_returns, window, percentile, limit)
 
-    profits_expanding = pda.utils.expanding_profits(strategy_returns_1d)
-    losses_expanding = pda.utils.expanding_losses(strategy_returns_1d)
-    pr_expanding = pda.utils.profit_ratio(profits=profits_expanding, losses=losses_expanding)
+    profits_expanding = pda_utils.expanding_profits(strategy_returns_1d)
+    losses_expanding = pda_utils.expanding_losses(strategy_returns_1d)
+    pr_expanding = pda_utils.profit_ratio(profits=profits_expanding, losses=losses_expanding)
 
-    profits_roll = pda.utils.rolling_profits(strategy_returns_1d, window)
-    losses_roll = pda.utils.rolling_losses(strategy_returns_1d, window)
-    pr_roll = pda.utils.profit_ratio(profits=profits_roll, losses=losses_roll)
+    profits_roll = pda_utils.rolling_profits(strategy_returns_1d, window)
+    losses_roll = pda_utils.rolling_losses(strategy_returns_1d, window)
+    pr_roll = pda_utils.profit_ratio(profits=profits_roll, losses=losses_roll)
 
     # Cumulative t-stat
     win_count = (
@@ -136,8 +136,8 @@ def calc_stats(
         .fillna(method="ffill")
     )
 
-    csr_expanding = pda.utils.common_sense_ratio(pr_expanding, tr_expanding)
-    csr_roll = pda.utils.common_sense_ratio(pr_roll, tr_roll)
+    csr_expanding = pda_utils.common_sense_ratio(pr_expanding, tr_expanding)
+    csr_roll = pda_utils.common_sense_ratio(pr_roll, tr_roll)
     csr_roll = expand_index(csr_roll, price_data.index).ffill()
 
     # Trade Count
@@ -148,8 +148,8 @@ def calc_stats(
     win_rate = (win_count / total_count).fillna(method="ffill")
     avg_win = profits_expanding / total_count
     avg_loss = losses_expanding / total_count
-    edge_expanding = pda.utils.expectancy(win_rate, avg_win, avg_loss).fillna(method="ffill")
-    sqn_expanding = pda.utils.t_stat(trade_count, edge_expanding)
+    edge_expanding = pda_utils.expectancy(win_rate, avg_win, avg_loss).fillna(method="ffill")
+    sqn_expanding = pda_utils.t_stat(trade_count, edge_expanding)
 
     win_roll = strategy_returns_1d.copy()
     win_roll[win_roll <= 0] = np.nan
@@ -157,13 +157,13 @@ def calc_stats(
     avg_win_roll = profits_roll / window
     avg_loss_roll = losses_roll / window
 
-    edge_roll = pda.utils.expectancy(
+    edge_roll = pda_utils.expectancy(
         win_rate=win_rate_roll, avg_win=avg_win_roll, avg_loss=avg_loss_roll
     )
-    sqn_roll = pda.utils.t_stat(signal_count=signal_roll, trading_edge=edge_roll)
+    sqn_roll = pda_utils.t_stat(signal_count=signal_roll, trading_edge=edge_roll)
 
-    score_expanding = pda.utils.robustness_score(grit_expanding, csr_expanding, sqn_expanding)
-    score_roll = pda.utils.robustness_score(grit_roll, csr_roll, sqn_roll)
+    score_expanding = pda_utils.robustness_score(grit_expanding, csr_expanding, sqn_expanding)
+    score_roll = pda_utils.robustness_score(grit_roll, csr_roll, sqn_roll)
     stat_sheet_dict = {
         # Note: commented out items should be included afterwords
         # 'ticker': symbol,
