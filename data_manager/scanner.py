@@ -426,12 +426,18 @@ class ScanData:
     peak_table: pd.DataFrame
 
 
-def run_scanner(scanner, stat_calculator, restrict_side=False) -> ScanData:
+def run_scanner(scanner, stat_calculator, restrict_side=False, capital=None, available_capital=None) -> ScanData:
     stat_overview = pd.DataFrame()
     entry_data = {}
     strategy_data_lookup = {}
     entry_table = []
     peak_table = []
+
+    if capital is None:
+        capital = 30000
+    if available_capital is None:
+        available_capital = capital
+
     for symbol, symbol_data, bench_data, strategy_data in scanner:
         if symbol_data is None or strategy_data is None:
             continue
@@ -485,7 +491,8 @@ def run_scanner(scanner, stat_calculator, restrict_side=False) -> ScanData:
 
         r_multiplier = 1.5
 
-        signals['shares'] = signal_table.eqty_risk_shares(strategy_data.enhanced_price_data, 30000, signals['risk'])
+        signals['shares'] = signal_table.eqty_risk_shares(strategy_data.enhanced_price_data, capital, signals['risk'])
+        # signals['shares_avc'] = signal_table.eqty_risk_shares(strategy_data.enhanced_price_data, available_capital, signals['risk'])
 
         _shares = signals.shares.copy()
         _shares.loc[_shares == 0] = 1

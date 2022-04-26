@@ -300,6 +300,8 @@ def scan_inst(
         scan_params,
         strategy_simulator,
         expected_exceptions,
+        capital=None,
+        available_capital=None
 ) -> scanner.ScanData:
     scan = scanner.StockDataGetter(
         # data_getter_method=lambda s: scanner.yf_get_stock_data(s, days=days, interval=interval_str),
@@ -326,7 +328,9 @@ def scan_inst(
             # freq='1D',
             # freq='5T',
         ),
-        restrict_side=scan_params['scanner_settings']['restrict_side']
+        restrict_side=scan_params['scanner_settings']['restrict_side'],
+        capital=capital,
+        available_capital=available_capital
     )
     return scan_data
 
@@ -422,7 +426,7 @@ def split_list(alist, wanted_parts=1):
     ]
 
 
-def main(scan_args, strategy_simulator, expected_exceptions):
+def main(scan_args, strategy_simulator, expected_exceptions, capital=None, available_capital=None):
     scanner_settings = scan_args['scanner_settings']
     multiprocess = scanner_settings['multiprocess']
 
@@ -436,7 +440,12 @@ def main(scan_args, strategy_simulator, expected_exceptions):
     if multiprocess:
         multiprocess_scan(
             mp_scan_inst,
-            (__price_glob, __bench, __benchmark_id, scan_args, strategy_simulator, expected_exceptions),
+            (
+                __price_glob,
+                __bench, __benchmark_id, scan_args,
+                strategy_simulator, expected_exceptions,
+                capital, available_capital
+            ),
             list_of_tickers, __interval_str, __data_loader
         )
         print(perf_counter()-start)
@@ -452,7 +461,9 @@ def main(scan_args, strategy_simulator, expected_exceptions):
             benchmark_id=__benchmark_id,
             scan_params=scan_args,
             strategy_simulator=strategy_simulator,
-            expected_exceptions=expected_exceptions
+            expected_exceptions=expected_exceptions,
+            capital=capital,
+            available_capital=available_capital
         )
 
 
