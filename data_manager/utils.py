@@ -37,11 +37,11 @@ class DataLoader:
     def file_path(self, file_name):
         return fr'{self.base}\{file_name}'
 
-    def history_path(self, bench: str, interval: str):
-        return self.file_path(self.files['history'][str(interval)][bench])
+    def history_path(self, *_, **__):
+        return self.file_path(self.files['history'])
 
-    def bench_path(self, bench: str, interval: str):
-        return self.file_path(self.files['bench'][str(interval)][bench])
+    def bench_path(self, *_, **__):
+        return self.file_path(self.files['bench'])
 
 
 def simple_relative(df, bm_close, rebase=True):
@@ -273,23 +273,22 @@ def main_re_download_data(other_json_path, base_json_path):
     relative = simple_relative(downloaded_data, bench_data.close)
 
     # TODO add relative data to schema
-    relative.to_csv(f'{data_loader.base}\\spy_relative_history_{interval_str}.csv')
+    relative.to_csv(f'{data_loader.base}\\relative_history.csv')
     downloaded_data.to_csv(history_path)
     bench_data.to_csv(bench_path)
-    dd_date_time.to_csv(data_loader.file_path(f'date_time_{interval_str}.csv'))
+    dd_date_time.to_csv(data_loader.file_path(f'date_time.csv'))
 
 
-def load_scan_data(ticker_wiki_url, other_path, base_path, days, interval, benchmark_id):
+def load_scan_data(ticker_wiki_url, other_path, base_path, interval, benchmark_id):
     """load data for scan"""
     ticks, _ = scanner.get_wikipedia_stocks(ticker_wiki_url)
     _interval = interval['num']
     _interval_type = interval['type']
-    interval_str = f'{_interval}{_interval_type}'
     data_loader = DataLoader.init_from_paths(other_path, base_path)
-    price_data = pd.read_csv(data_loader.history_path(benchmark_id, interval_str), index_col=0, header=[0, 1]).astype('float64')
+    price_data = pd.read_csv(data_loader.history_path(), index_col=0, header=[0, 1]).astype('float64')
     price_glob = PriceGlob(price_data).swap_level()
-    bench = pd.read_csv(data_loader.bench_path(benchmark_id, interval_str), index_col=0).astype('float64')
-    return ticks, price_glob, bench, benchmark_id, interval_str, _interval, data_loader
+    bench = pd.read_csv(data_loader.bench_path(), index_col=0).astype('float64')
+    return ticks, price_glob, bench, benchmark_id, data_loader
 
 
 def scan_inst(
@@ -335,7 +334,7 @@ def scan_inst(
     return scan_data
 
 
-def multiprocess_scan(_scanner, scan_args, ticks_list, interval_str, data_loader):
+def multiprocess_scan(_scanner, scan_args, ticks_list, data_loader):
     with Pool(None) as p:
         results: t.List[scanner.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
 
@@ -353,10 +352,10 @@ def multiprocess_scan(_scanner, scan_args, ticks_list, interval_str, data_loader
     _entries_table = pd.concat(_entries)
     _peak_table = pd.concat(_peaks)
     # stat_overview_ = stat_overview_.sort_values('risk_adj_returns_roll', axis=1, ascending=False)
-    _stat_overview.to_csv(data_loader.file_path(f'stat_overview_{interval_str}.csv'))
+    _stat_overview.to_csv(data_loader.file_path(f'stat_overview.csv'))
     pkl_fp = data_loader.file_path('strategy_lookup.pkl')
-    entry_fp = data_loader.file_path(f'entry_table_{interval_str}.pkl')
-    peak_fp = data_loader.file_path(f'peak_table_{interval_str}.pkl')
+    entry_fp = data_loader.file_path(f'entry_table.pkl')
+    peak_fp = data_loader.file_path(f'peak_table.pkl')
     _entries_table.to_pickle(entry_fp)
     _peak_table.to_pickle(peak_fp)
     with open(pkl_fp, 'wb') as f:
@@ -431,8 +430,7 @@ def main(scan_args, strategy_simulator, expected_exceptions, capital=None, avail
     multiprocess = scanner_settings['multiprocess']
 
     (__ticks, __price_glob, __bench,
-     __benchmark_id, __interval_str,
-     __interval, __data_loader) = load_scan_data(**scan_args['load_data'])
+     __benchmark_id, __data_loader) = load_scan_data(**scan_args['load_data'])
     __price_glob._data = __price_glob.data.ffill()
     list_of_tickers = split_list(__ticks, cpu_count()-1)
     # list_of_tickers = split_list(['OKE', 'CSCO', 'NLOK'], cpu_count()-1)
@@ -446,7 +444,7 @@ def main(scan_args, strategy_simulator, expected_exceptions, capital=None, avail
                 strategy_simulator, expected_exceptions,
                 capital, available_capital
             ),
-            list_of_tickers, __interval_str, __data_loader
+            list_of_tickers, __data_loader
         )
         print(perf_counter()-start)
     else:
@@ -471,9 +469,5 @@ if __name__ == '__main__':
     with open('scan_args.json', 'r') as args_fp:
         _args = json.load(args_fp)
     main(_args)
-
-
-
-
 
 
