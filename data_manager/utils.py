@@ -425,12 +425,12 @@ def split_list(alist, wanted_parts=1):
     ]
 
 
-def main(scan_args, strategy_simulator, expected_exceptions, capital=None, available_capital=None):
+def main(scan_args, strategy_simulator, expected_exceptions, scan_data, capital=None, available_capital=None):
     scanner_settings = scan_args['scanner_settings']
     multiprocess = scanner_settings['multiprocess']
 
     (__ticks, __price_glob, __bench,
-     __benchmark_id, __data_loader) = load_scan_data(**scan_args['load_data'])
+     __benchmark_id, __data_loader) = scan_data
     __price_glob._data = __price_glob.data.ffill()
     list_of_tickers = split_list(__ticks, cpu_count()-1)
     # list_of_tickers = split_list(['OKE', 'CSCO', 'NLOK'], cpu_count()-1)
