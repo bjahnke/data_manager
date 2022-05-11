@@ -6,11 +6,12 @@ import typing as t
 import pandas as pd
 from matplotlib import pyplot as plt
 import pickle
-from multiprocessing import Pool, cpu_count
+import multiprocessing as mp
 from time import perf_counter
 import pandas_accessors.utils as pda_utils
 import pandas_accessors.accessors as pda
 import numpy as np
+import sys
 
 
 class DataLoader:
@@ -82,7 +83,8 @@ def calc_stats(
     :param limit:
     :return:
     """
-    price_data = round(price_data, round_to)
+    if round_to != -1:
+        price_data = round(price_data, round_to)
     # TODO include regime returns
     signal_table = pda.SignalTable(signals.copy())
     signal_table.data["trade_count"] = signal_table.counts
@@ -294,8 +296,8 @@ def load_scan_data(ticker_wiki_url, other_path, base_path, interval, benchmark_i
 def scan_inst(
         _ticks: t.List[str],
         price_glob: t.Any,
-        bench: pd.DataFrame,
-        benchmark_id: str,
+        bench: t.Union[None, pd.DataFrame],
+        benchmark_id: t.Union[None, str],
         scan_params,
         strategy_simulator,
         expected_exceptions,
@@ -311,7 +313,7 @@ def scan_inst(
         # symbols=['FAST'],
         strategy=lambda pdf_, _: (
             strategy_simulator(
-                price_data=scanner.data_to_relative(pdf_, bench),
+                price_data=scanner.data_to_relative(pdf_, bench) if bench is not None else pdf_,
                 abs_price_data=pdf_,
                 **scan_params['strategy_params']
             )
@@ -335,8 +337,15 @@ def scan_inst(
 
 
 def multiprocess_scan(_scanner, scan_args, ticks_list, data_loader):
-    with Pool(None) as p:
+    def myexcepthook(exctype, value, traceback):
+        for p in mp.active_children():
+            p.terminate()
+
+    with mp.Pool(None) as p:
+        sys.excepthook = myexcepthook
         results: t.List[scanner.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
+
+
 
     _stats = []
     _entries = []
@@ -430,9 +439,9 @@ def main(scan_args, strategy_simulator, expected_exceptions, scan_data, capital=
     multiprocess = scanner_settings['multiprocess']
 
     (__ticks, __price_glob, __bench,
-     __benchmark_id, __data_loader) = scan_data
+     __benchmark_id, __data_loader) = scan_data  # load_scan_data(**scan_args['load_data'])
     __price_glob._data = __price_glob.data.ffill()
-    list_of_tickers = split_list(__ticks, cpu_count()-1)
+    list_of_tickers = split_list(__ticks, mp.cpu_count() - 1)
     # list_of_tickers = split_list(['OKE', 'CSCO', 'NLOK'], cpu_count()-1)
     start = perf_counter()
     if multiprocess:

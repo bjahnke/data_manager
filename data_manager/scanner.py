@@ -27,7 +27,7 @@ class StockDataGetter:
 
     def yield_strategy_data(
         self,
-        bench_symbol,
+        bench_symbol: t.Union[None, str],
         symbols: t.List[str],
         strategy: t.Callable[[pd.DataFrame, pd.DataFrame], t.Any],
         expected_exceptions: t.Tuple
@@ -42,7 +42,7 @@ class StockDataGetter:
         """
         for i, symbol in enumerate(symbols):
             print(f"({i}/{len(symbols)}) {symbol}")  # , end='\r')
-            bench_data = self.get_stock_data(bench_symbol)
+            bench_data = self.get_stock_data(bench_symbol) if bench_symbol is not None else None
             symbol_data = self.get_stock_data(symbol)
             strategy_data = None
             if not symbol_data.empty:
@@ -473,58 +473,13 @@ def run_scanner(scanner, stat_calculator, restrict_side=False, capital=None, ava
         signals['abs_exit'] = signal_table.exit_prices(price_table)
         # signals['abs_return'] = signal_table.static_returns(price_table)
         signals['partial_exit'] = signal_table.partial_exit_prices(price_table)
-
         risk = signal_table.pyramid_all(-0.0075)
-
-        # signals['win_roll'] = stat_sheet_historical.win_roll.loc[signals.entry].values
-        # signals['avg_win_roll'] = stat_sheet_historical.avg_win_roll.loc[signals.entry].values
-        # signals['avg_loss_roll'] = stat_sheet_historical.avg_loss_roll.loc[signals.entry].values
         signals['risk'] = risk
-
-        # win_rate_query = (signals.win_roll > .5)
-        # signals.loc[win_rate_query, 'risk'] = smm.other_kelly(
-        #     win_rate=signals['win_roll'].loc[win_rate_query],
-        #     avg_win=signals['avg_win_roll'].loc[win_rate_query],
-        #     avg_loss=signals['avg_win_roll'].loc[win_rate_query],
-        # )
-        # signals['risk'] = signals['risk'] * .5
-
         r_multiplier = 1.5
 
-        signals['shares'] = signal_table.eqty_risk_shares(strategy_data.enhanced_price_data, capital, signals['risk'])
-        # signals['shares_avc'] = signal_table.eqty_risk_shares(strategy_data.enhanced_price_data, available_capital, signals['risk'])
-
-        _shares = signals.shares.copy()
-        _shares.loc[_shares == 0] = 1
-        partial_exit_ptc = ((signals.shares / r_multiplier) / _shares)
-        # remaining_exit_ptc = 1 - partial_exit_ptc
-        partial_exit_shares = (signals.shares * partial_exit_ptc).apply(np.ceil)
-        remaining_exit_shares = signals.shares - partial_exit_shares
-
-        signals['partial_profit'] = (signals.partial_exit - signals.abs_entry) * partial_exit_shares
-        signals['rem_profit'] = (signals.abs_exit - signals.abs_entry) * remaining_exit_shares
-        signals['partial_total'] = signals.partial_profit + signals.rem_profit
-        signals['no_partial_total'] = (signals.abs_exit - signals.abs_entry) * signals.shares
-        signals['my_total'] = signals['partial_total']
-        signals.loc[pd.isna(signals.my_total), 'my_total'] = signals.loc[pd.isna(signals.my_total), 'no_partial_total']
-        signals['total'] = signals.my_total.cumsum()
-
+        signals = simulate_size_shares(signals, signal_table, strategy_data, capital, r_multiplier)
         entry_data[symbol] = signals
 
-        # fig, axes = plt.subplots(nrows=3, ncols=1)
-
-        # strategy_data.enhanced_price_data['stop_loss'] = strategy_data.stop_loss_series
-        # strategy_data.enhanced_price_data['french_stop'] = strategy_data.french_stop.stop_price
-        # enhanced_price_data_plot(strategy_data.enhanced_price_data, ax=axes[0])
-
-        # bench_data["close"] = bench_data["close"].div(bench_data["close"][0])
-        # symbol_data['stop_loss'] = strategy_data.enhanced_price_data['stop_loss'] * bench_data.close
-        # symbol_data[['close', 'stop_loss']].plot(use_index=False, ax=axes[1])
-        # pd.DataFrame({
-        #     'abs_rel_delta': abs(symbol_data.close - strategy_data.enhanced_price_data.close),
-        #     '': abs(symbol_data.close - symbol_data.stop_loss)
-        # }).plot(use_index=False, ax=axes[2])
-        # plt.show()
         stat_sheet_final_scores['weight_total'] = signals.total.iloc[-1]
         stat_overview = pd.concat([stat_overview, stat_sheet_final_scores.to_frame().transpose()], ignore_index=True)
         entry_table.append(signals)
@@ -533,6 +488,42 @@ def run_scanner(scanner, stat_calculator, restrict_side=False, capital=None, ava
     entry_table = pd.concat(entry_table)
     peak_table = pd.concat(peak_table)
     return ScanData(stat_overview, strategy_data_lookup, entry_table, peak_table)
+
+
+def simulate_size_shares(signals, signal_table, strategy_data, capital, r_multiplier):
+    signals['shares'] = signal_table.eqty_risk_shares(strategy_data.enhanced_price_data, capital, signals['risk'])
+    _shares = signals.shares.copy()
+    _shares.loc[_shares == 0] = 1
+    partial_exit_ptc = ((signals.shares / r_multiplier) / _shares)
+    partial_exit_shares = (signals.shares * partial_exit_ptc).apply(np.ceil)
+    remaining_exit_shares = signals.shares - partial_exit_shares
+
+    signals['partial_profit'] = (signals.partial_exit - signals.abs_entry) * partial_exit_shares
+    signals['rem_profit'] = (signals.abs_exit - signals.abs_entry) * remaining_exit_shares
+    signals['partial_total'] = signals.partial_profit + signals.rem_profit
+    signals['no_partial_total'] = (signals.abs_exit - signals.abs_entry) * signals.shares
+    signals['my_total'] = signals['partial_total']
+    signals.loc[pd.isna(signals.my_total), 'my_total'] = signals.loc[pd.isna(signals.my_total), 'no_partial_total']
+    signals['total'] = signals.my_total.cumsum()
+    return signals
+
+
+def simulate_size_cash(signals, signal_table, capital, r_multiplier):
+    _, signals['shares'] = signal_table.init_eqty_risk_nominal_sizes(capital, signals['risk'])
+    signals['shares'] = signals['shares'] * -1
+    _shares = signals.shares.copy()
+    _shares.loc[_shares == 0] = 1
+    partial_exit_ptc = ((signals.shares / r_multiplier) / _shares)
+    partial_exit_shares = (signals.shares * partial_exit_ptc)
+    remaining_exit_shares = signals.shares - partial_exit_shares
+
+    signals['partial_profit'] = (signals.partial_exit - signals.abs_entry) * (partial_exit_shares / signals.abs_entry)
+    signals['rem_profit'] = (signals.abs_exit - signals.abs_entry) * (remaining_exit_shares / signals.abs_entry)
+    signals['partial_total'] = signals.partial_profit + signals.rem_profit
+    signals['no_partial_total'] = (signals.abs_exit - signals.abs_entry) * (signals.shares / signals.abs_entry)
+    signals['my_total'] = signals['partial_total']
+    signals.loc[pd.isna(signals.my_total), 'my_total'] = signals.loc[pd.isna(signals.my_total), 'no_partial_total']
+    signals['total'] = signals.my_total.cumsum()
 
 
 if __name__ == '__main__':
