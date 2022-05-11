@@ -492,6 +492,7 @@ def run_scanner(scanner, stat_calculator, restrict_side=False, capital=None, ava
 
 def simulate_size_shares(signals, signal_table, strategy_data, capital, r_multiplier):
     signals['shares'] = signal_table.eqty_risk_shares(strategy_data.enhanced_price_data, capital, signals['risk'])
+    signals['shares'] = signals.shares * -1
     _shares = signals.shares.copy()
     _shares.loc[_shares == 0] = 1
     partial_exit_ptc = ((signals.shares / r_multiplier) / _shares)
