@@ -293,6 +293,15 @@ def load_scan_data(ticker_wiki_url, other_path, base_path, interval, benchmark_i
     return ticks, price_glob, bench, benchmark_id, data_loader
 
 
+@dataclass
+class ScanData:
+    ticks: t.List[str]
+    price_glob: pd.DataFrame
+    bench: pd.DataFrame
+    benchmark_id: str
+    data_loader: DataLoader
+
+
 def scan_inst(
         _ticks: t.List[str],
         price_glob: t.Any,
@@ -304,6 +313,20 @@ def scan_inst(
         capital=None,
         available_capital=None
 ) -> scanner.ScanData:
+    """
+    Scan Instance, workflow which run a strategy simulator and calculates performance statistics on results.
+    Creates a yield generator with the strategy simulator and passes that to the scanner
+    :param _ticks:
+    :param price_glob:
+    :param bench:
+    :param benchmark_id:
+    :param scan_params:
+    :param strategy_simulator:
+    :param expected_exceptions:
+    :param capital:
+    :param available_capital:
+    :return:
+    """
     scan = scanner.StockDataGetter(
         # data_getter_method=lambda s: scanner.yf_get_stock_data(s, days=days, interval=interval_str),
         data_getter_method=lambda s: price_glob.get_prices(s),
@@ -334,6 +357,49 @@ def scan_inst(
         available_capital=available_capital
     )
     return scan_data
+
+
+def regime_analysis(
+        _ticks: t.List[str],
+        price_glob: t.Any,
+        bench: t.Union[None, pd.DataFrame],
+        benchmark_id: t.Union[None, str],
+        scan_params,
+        strategy_simulator,
+        expected_exceptions,
+) -> t.Dict[str, t.Any]:
+    """
+    Performs regime analysis on the given symbols
+
+    :param _ticks:
+    :param price_glob:
+    :param bench:
+    :param benchmark_id:
+    :param scan_params:
+    :param strategy_simulator:
+    :param expected_exceptions:
+    :param capital:
+    :param available_capital:
+    :return:
+    """
+    scan_generator = scanner.StockDataGetter(
+        # data_getter_method=lambda s: scanner.yf_get_stock_data(s, days=days, interval=interval_str),
+        data_getter_method=lambda s: price_glob.get_prices(s),
+    ).yield_strategy_data(
+        bench_symbol=benchmark_id,
+        symbols=_ticks,
+        # symbols=['FAST'],
+        strategy=lambda pdf_, _: (
+            strategy_simulator(
+                price_data=scanner.data_to_relative(pdf_, bench) if bench is not None else pdf_,
+                abs_price_data=pdf_,
+                **scan_params['strategy_params']
+            )
+        ),
+        expected_exceptions=expected_exceptions
+    )
+    res = {symbol: strategy_data for symbol, _, __, strategy_data in scan_generator}
+    return res
 
 
 def multiprocess_scan(_scanner, scan_args, ticks_list, data_loader):
