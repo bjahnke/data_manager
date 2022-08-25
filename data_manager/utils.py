@@ -12,6 +12,7 @@ import pandas_accessors.utils as pda_utils
 import pandas_accessors.accessors as pda
 import numpy as np
 import sys
+from dataclasses import dataclass
 
 
 class DataLoader:
@@ -358,6 +359,8 @@ def scan_inst(
     )
     return scan_data
 
+def mp_regime_analysis(args):
+    return regime_analysis(*args)
 
 def regime_analysis(
         _ticks: t.List[str],
@@ -403,6 +406,7 @@ def regime_analysis(
 
 
 def multiprocess_scan(_scanner, scan_args, ticks_list, data_loader):
+    ticks_list = split_list(ticks_list, mp.cpu_count() - 1)
     def myexcepthook(exctype, value, traceback):
         for p in mp.active_children():
             p.terminate()
@@ -410,7 +414,6 @@ def multiprocess_scan(_scanner, scan_args, ticks_list, data_loader):
     with mp.Pool(None) as p:
         sys.excepthook = myexcepthook
         results: t.List[scanner.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
-
 
 
     _stats = []
@@ -436,6 +439,22 @@ def multiprocess_scan(_scanner, scan_args, ticks_list, data_loader):
     with open(pkl_fp, 'wb') as f:
         pickle.dump(_strategy_lookup, f)
     print('done')
+
+
+def mp_analysis(_scanner, scan_args, ticks_list):
+    ticks_list = split_list(ticks_list, mp.cpu_count() - 1)
+    def myexcepthook(exctype, value, traceback):
+        for p in mp.active_children():
+            p.terminate()
+
+    with mp.Pool(None) as p:
+        sys.excepthook = myexcepthook
+        results: t.List[scanner.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
+
+    return {k: v for d in results for k, v in d.items()}
+
+
+
 
 
 class PriceGlob:
@@ -507,7 +526,6 @@ def main(scan_args, strategy_simulator, expected_exceptions, scan_data, capital=
     (__ticks, __price_glob, __bench,
      __benchmark_id, __data_loader) = scan_data  # load_scan_data(**scan_args['load_data'])
     __price_glob._data = __price_glob.data.ffill()
-    list_of_tickers = split_list(__ticks, mp.cpu_count() - 1)
     # list_of_tickers = split_list(['OKE', 'CSCO', 'NLOK'], cpu_count()-1)
     start = perf_counter()
     if multiprocess:
@@ -515,11 +533,16 @@ def main(scan_args, strategy_simulator, expected_exceptions, scan_data, capital=
             mp_scan_inst,
             (
                 __price_glob,
-                __bench, __benchmark_id, scan_args,
-                strategy_simulator, expected_exceptions,
-                capital, available_capital
+                __bench,
+                __benchmark_id,
+                scan_args,
+                strategy_simulator,
+                expected_exceptions,
+                capital,
+                available_capital
             ),
-            list_of_tickers, __data_loader
+            __ticks,
+            __data_loader
         )
         print(perf_counter()-start)
     else:
@@ -538,6 +561,9 @@ def main(scan_args, strategy_simulator, expected_exceptions, scan_data, capital=
             capital=capital,
             available_capital=available_capital
         )
+
+
+
 
 
 if __name__ == '__main__':
