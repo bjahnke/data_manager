@@ -282,6 +282,13 @@ def main_re_download_data(other_json_path, base_json_path):
     dd_date_time.to_csv(data_loader.file_path(f'date_time.csv'))
 
 
+def get_smp_data():
+    """
+    pull smp data from wiki page
+    :return:
+    """
+    return scanner.get_wikipedia_stocks("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+
 def load_scan_data(ticker_wiki_url, other_path, base_path, interval, benchmark_id):
     """load data for scan"""
     ticks, _ = scanner.get_wikipedia_stocks(ticker_wiki_url)
@@ -452,9 +459,6 @@ def mp_analysis(_scanner, scan_args, ticks_list):
         results: t.List[scanner.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
 
     return {k: v for d in results for k, v in d.items()}
-
-
-
 
 
 class PriceGlob:
