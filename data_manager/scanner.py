@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import numpy as np
 import pandas as pd
+import pandas_accessors.accessors
 from matplotlib import pyplot as plt
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -490,7 +491,7 @@ def run_scanner(scanner, stat_calculator, restrict_side=False, capital=None, ava
     return ScanData(stat_overview, strategy_data_lookup, entry_table, peak_table)
 
 
-def simulate_size_shares(signals, signal_table, strategy_data, capital, r_multiplier):
+def simulate_size_shares(signals, signal_table: pandas_accessors.accessors.SignalTable, strategy_data, capital, r_multiplier):
     signals['shares'] = signal_table.eqty_risk_shares(strategy_data.enhanced_price_data, capital, signals['risk'])
     signals['shares'] = signals.shares * -1
     _shares = signals.shares.copy()
