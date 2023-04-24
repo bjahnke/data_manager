@@ -249,6 +249,12 @@ def win_rate_calc(
 
 def main_re_download_data(other_json_path, base_json_path):
     """
+    pull latest stock data and store locally
+    :param other_json_path:
+    :param base_json_path:
+    :return:
+    """
+    """
     re download stock and bench data, write to locations specified in paths.json
     set index to int and store date index in separate series
     """
@@ -256,9 +262,8 @@ def main_re_download_data(other_json_path, base_json_path):
     ticks, _ = scanner.get_wikipedia_stocks(sp500_wiki)
     data_loader = DataLoader.init_from_paths(other_json_path, base_json_path)
     bench = 'SPY'
-    days = 59
-    interval = 15
-    interval_str = f'{interval}m'
+    days = 365
+    interval_str = f'1d'
     history_path = data_loader.history_path(bench=bench, interval=interval_str)
     bench_path = data_loader.bench_path(bench=bench, interval=interval_str)
     downloaded_data = scanner.yf_download_data(ticks, days, interval_str)
@@ -571,7 +576,8 @@ def main(scan_args, strategy_simulator, expected_exceptions, scan_data, capital=
 
 
 if __name__ == '__main__':
-    with open('scan_args.json', 'r') as args_fp:
+    main_re_download_data()
+    with open("C:\\Users\\bjahn\\PycharmProjects\\backtest_notebook\\data_args\\scan_args.json", "r") as args_fp:
         _args = json.load(args_fp)
     main(_args)
 
