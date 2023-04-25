@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import typing as t
 import pandas_accessors.accessors as pda
 import regime
-
+import data_manager.data_manager_types as dm_types
 
 class StockDataGetter:
     def __init__(self, data_getter_method: t.Callable):
@@ -419,15 +419,7 @@ def yf_download_data(tickers, days, interval) -> pd.DataFrame:
     return data[["open", "high", "low", "close"]]
 
 
-@dataclass
-class ScanData:
-    stat_overview: pd.DataFrame
-    strategy_lookup: t.Dict
-    entry_table: pd.DataFrame
-    peak_table: pd.DataFrame
-
-
-def run_scanner(scanner, stat_calculator, restrict_side=False, capital=None, available_capital=None) -> ScanData:
+def run_scanner(scanner, stat_calculator, restrict_side=False, capital=None, available_capital=None) -> dm_types.ScanData:
     stat_overview = pd.DataFrame()
     entry_data = {}
     strategy_data_lookup = {}
@@ -488,7 +480,7 @@ def run_scanner(scanner, stat_calculator, restrict_side=False, capital=None, ava
     stat_overview = stat_overview.reset_index(drop=True)
     entry_table = pd.concat(entry_table)
     peak_table = pd.concat(peak_table)
-    return ScanData(stat_overview, strategy_data_lookup, entry_table, peak_table)
+    return dm_types.ScanData(stat_overview, strategy_data_lookup, entry_table, peak_table)
 
 
 def simulate_size_shares(signals, signal_table: pandas_accessors.accessors.SignalTable, strategy_data, capital, r_multiplier):

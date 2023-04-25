@@ -13,6 +13,7 @@ import pandas_accessors.accessors as pda
 import numpy as np
 import sys
 from dataclasses import dataclass
+import data_manager.data_manager_types as dm_types
 
 
 class DataLoader:
@@ -28,9 +29,14 @@ class DataLoader:
             base = json.load(base_fp)['base']
         return cls(data, base)
 
+    @classmethod
+    def init_with_config(cls, config: t.Dict):
+        dm_config = dm_types.AppConfig.parse_obj(config)
+        return cls(dm_config.data_config, dm_config.base)
+
     @property
     def files(self):
-        return self._data['files']
+        return self._data.files
 
     @property
     def base(self):
@@ -44,6 +50,112 @@ class DataLoader:
 
     def bench_path(self, *_, **__):
         return self.file_path(self.files['bench'])
+
+
+class YfSourceDataLoader(DataLoader):
+    """
+    DataLoader class with yfinance integration
+    """
+    def download_data(
+            self,
+            stock_table_url: str = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies',
+            bench: str = 'SPY',
+            days: int = 365,
+            interval_str: str = '1d'
+    ):
+        ticks, _ = scanner.get_wikipedia_stocks(stock_table_url)
+        history_path = self.history_path(bench=bench, interval=interval_str)
+        bench_path = self.bench_path(bench=bench, interval=interval_str)
+        downloaded_data = scanner.yf_download_data(ticks, days, interval_str)
+        downloaded_data = downloaded_data.reset_index()
+        dd_date_time = downloaded_data[downloaded_data.columns.to_list()[0]]
+        bench_data = scanner.yf_get_stock_data(bench, days, interval_str)
+        bench_data = bench_data.reset_index()
+        bd_date_time = bench_data[bench_data.columns.to_list()[0]]
+
+        assert dd_date_time.equals(bd_date_time)
+
+        downloaded_data = downloaded_data[downloaded_data.columns.to_list()[1:]]
+        bench_data = bench_data[bench_data.columns.to_list()[1:]]
+
+        relative = simple_relative(downloaded_data, bench_data.close)
+
+        # TODO add relative data to schema
+        relative.to_csv(f'{self.base}\\relative_history.csv')
+        downloaded_data.to_csv(history_path)
+        bench_data.to_csv(bench_path)
+        dd_date_time.to_csv(self.file_path(f'date_time.csv'))
+
+    def load_scan_data(self, ticker_wiki_url, interval, benchmark_id):
+        """load data for scan"""
+        ticks, _ = scanner.get_wikipedia_stocks(ticker_wiki_url)
+        _interval = interval['num']
+        _interval_type = interval['type']
+        price_data = pd.read_csv(self.history_path(), index_col=0, header=[0, 1]).astype('float64')
+        price_glob = PriceGlob(price_data).swap_level()
+        bench = pd.read_csv(self.bench_path(), index_col=0).astype('float64')
+        return ticks, price_glob, bench, benchmark_id, self
+
+    def multiprocess_scan(self, _scanner, scan_args, ticks_list):
+        ticks_list = split_list(ticks_list, mp.cpu_count() - 1)
+
+        def myexcepthook(exctype, value, traceback):
+            for p in mp.active_children():
+                p.terminate()
+
+        with mp.Pool(None) as p:
+            sys.excepthook = myexcepthook
+            results: t.List[dm_types.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
+
+        _stats = []
+        _entries = []
+        _peaks = []
+        _strategy_lookup = {}
+        for scan_data in results:
+            _stats.append(scan_data.stat_overview)
+            _strategy_lookup |= scan_data.strategy_lookup
+            _entries.append(scan_data.entry_table)
+            _peaks.append(scan_data.peak_table)
+
+        _stat_overview = pd.concat(_stats)
+        _entries_table = pd.concat(_entries)
+        _peak_table = pd.concat(_peaks)
+        # stat_overview_ = stat_overview_.sort_values('risk_adj_returns_roll', axis=1, ascending=False)
+        _stat_overview.to_csv(self.file_path(f'stat_overview.csv'))
+        pkl_fp = self.file_path('strategy_lookup.pkl')
+        entry_fp = self.file_path(f'entry_table.pkl')
+        peak_fp = self.file_path(f'peak_table.pkl')
+        _entries_table.to_pickle(entry_fp)
+        _peak_table.to_pickle(peak_fp)
+        with open(pkl_fp, 'wb') as f:
+            pickle.dump(_strategy_lookup, f)
+        print('done')
+
+
+def reshape_stock_data(stocks_data):
+    # Reset MultiIndex columns
+    stocks_data.columns = stocks_data.columns.to_flat_index()
+
+    # Rename columns to 'symbol_attribute' format
+    stocks_data.columns = [f'{symbol}_{attribute}' for symbol, attribute in stocks_data.columns]
+
+    # Stack data by stock symbols
+    stacked_data = stocks_data.stack(level=0)
+
+    # Reset index and rename columns
+    stacked_data = stacked_data.reset_index().rename(columns={'level_0': 'timestamp', 'level_1': 'symbol_attribute'})
+
+    # Split 'symbol_attribute' column into 'symbol' and 'attribute' columns
+    stacked_data[['symbol', 'attribute']] = stacked_data['symbol_attribute'].str.split('_', expand=True)
+
+    # Remove 'symbol_attribute' column
+    stacked_data = stacked_data.drop(columns=['symbol_attribute'])
+
+    # Pivot table to have separate columns for open, high, low, and close
+    final_data = stacked_data.pivot_table(index=['timestamp', 'symbol'], columns='attribute', values=0).reset_index()
+
+    return final_data
+
 
 
 def simple_relative(df, bm_close, rebase=True):
@@ -247,7 +359,7 @@ def win_rate_calc(
     return win_rate
 
 
-def main_re_download_data(other_json_path, base_json_path):
+def main_re_download_data(data_manager_config: t.Dict):
     """
     pull latest stock data and store locally
     :param other_json_path:
@@ -260,7 +372,7 @@ def main_re_download_data(other_json_path, base_json_path):
     """
     sp500_wiki = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     ticks, _ = scanner.get_wikipedia_stocks(sp500_wiki)
-    data_loader = DataLoader.init_from_paths(other_json_path, base_json_path)
+    data_loader = DataLoader.init_with_config(data_manager_config)
     bench = 'SPY'
     days = 365
     interval_str = f'1d'
@@ -284,6 +396,8 @@ def main_re_download_data(other_json_path, base_json_path):
     relative.to_csv(f'{data_loader.base}\\relative_history.csv')
     downloaded_data.to_csv(history_path)
     bench_data.to_csv(bench_path)
+    # need to transpose data to remove multiindex,
+    # add symbol column (add as PriceGlob function)
     dd_date_time.to_csv(data_loader.file_path(f'date_time.csv'))
 
 
@@ -325,7 +439,7 @@ def scan_inst(
         expected_exceptions,
         capital=None,
         available_capital=None
-) -> scanner.ScanData:
+) -> dm_types.ScanData:
     """
     Scan Instance, workflow which run a strategy simulator and calculates performance statistics on results.
     Creates a yield generator with the strategy simulator and passes that to the scanner
@@ -425,7 +539,7 @@ def multiprocess_scan(_scanner, scan_args, ticks_list, data_loader):
 
     with mp.Pool(None) as p:
         sys.excepthook = myexcepthook
-        results: t.List[scanner.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
+        results: t.List[dm_types.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
 
 
     _stats = []
@@ -461,7 +575,7 @@ def mp_analysis(_scanner, scan_args, ticks_list):
 
     with mp.Pool(None) as p:
         sys.excepthook = myexcepthook
-        results: t.List[scanner.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
+        results: t.List[dm_types.ScanData] = p.map(_scanner, [(ticks,) + scan_args for ticks in ticks_list])
 
     return {k: v for d in results for k, v in d.items()}
 
@@ -514,6 +628,49 @@ class PriceGlob:
         except KeyError:
             pass
         return d
+
+    def un_glob(self) -> pd.DataFrame:
+        # Check the position of the 'symbol' and 'OHLC' levels in the columns MultiIndex
+        stock_data = self._data.copy()
+        if not isinstance(stocks_data.columns, pd.MultiIndex):
+            raise ValueError("The input DataFrame should have a MultiIndex with 'symbol' and 'OHLC' levels.")
+
+        first_element = stocks_data.columns[0][0]
+        if isinstance(first_element, str):  # Symbol is in the first level
+            symbol_position, ohlc_position = 0, 1
+        else:  # OHLC is in the first level
+            symbol_position, ohlc_position = 1, 0
+
+        # Reset MultiIndex columns
+        stocks_data.columns = stocks_data.columns.to_flat_index()
+
+        # Rename columns to 'symbol_attribute' format
+        if symbol_position < ohlc_position:
+            stocks_data.columns = [f'{symbol}_{attribute}' for symbol, attribute in stocks_data.columns]
+        else:
+            stocks_data.columns = [f'{attribute}_{symbol}' for attribute, symbol in stocks_data.columns]
+
+        # Stack data by stock symbols
+        stacked_data = stocks_data.stack(level=symbol_position)
+
+        # Reset index and rename columns
+        stacked_data = stacked_data.reset_index().rename(
+            columns={'level_0': 'timestamp', 'level_1': 'symbol_attribute'})
+
+        # Split 'symbol_attribute' column into 'symbol' and 'attribute' columns
+        if symbol_position < ohlc_position:
+            stacked_data[['symbol', 'attribute']] = stacked_data['symbol_attribute'].str.split('_', expand=True)
+        else:
+            stacked_data[['attribute', 'symbol']] = stacked_data['symbol_attribute'].str.split('_', expand=True)
+
+        # Remove 'symbol_attribute' column
+        stacked_data = stacked_data.drop(columns=['symbol_attribute'])
+
+        # Pivot table to have separate columns for open, high, low, and close
+        final_data = stacked_data.pivot_table(index=['timestamp', 'symbol'], columns='attribute',
+                                              values=0).reset_index()
+
+        return final_data
 
 
 def mp_scan_inst(_args):
@@ -570,9 +727,6 @@ def main(scan_args, strategy_simulator, expected_exceptions, scan_data, capital=
             capital=capital,
             available_capital=available_capital
         )
-
-
-
 
 
 if __name__ == '__main__':
