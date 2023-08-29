@@ -56,7 +56,20 @@ class YfSourceDataLoader(DataLoader):
     """
     DataLoader class with yfinance integration
     """
+
     def download_data(
+            self,
+            stock_table_url: str = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies',
+            bench: str = 'SPY',
+            days: int = 365,
+            interval_str: str = '1d'
+    ):
+
+        tables = self._download_data(stock_table_url, bench, days, interval_str)
+        tables = self._build_tables(*tables)
+        self._store_data_locally(*tables)
+
+    def _download_data(
             self,
             stock_table_url: str = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies',
             bench: str = 'SPY',
@@ -68,8 +81,12 @@ class YfSourceDataLoader(DataLoader):
         bench_path = self.bench_path(bench=bench, interval=interval_str)
         downloaded_data = scanner.yf_download_data(ticks, days, interval_str)
         downloaded_data = downloaded_data.reset_index()
-        dd_date_time = downloaded_data[downloaded_data.columns.to_list()[0]]
         bench_data = scanner.yf_get_stock_data(bench, days, interval_str)
+        return downloaded_data, bench_data
+
+    def _build_tables(self, downloaded_data, bench_data):
+        downloaded_data = downloaded_data.reset_index()
+        dd_date_time = downloaded_data[downloaded_data.columns.to_list()[0]]
         bench_data = bench_data.reset_index()
         bd_date_time = bench_data[bench_data.columns.to_list()[0]]
 
@@ -77,9 +94,9 @@ class YfSourceDataLoader(DataLoader):
 
         downloaded_data = downloaded_data[downloaded_data.columns.to_list()[1:]]
         bench_data = bench_data[bench_data.columns.to_list()[1:]]
-
         relative = simple_relative(downloaded_data, bench_data.close)
-
+        return downloaded_data, bench_data, dd_date_time, relative
+    def _store_data_locally(self, downloaded_data, bench_data, dd_date_time, relative):
         # TODO add relative data to schema
         relative.to_csv(f'{self.base}\\relative_history.csv')
         downloaded_data.to_csv(history_path)
